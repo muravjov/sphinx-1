@@ -128,8 +128,12 @@ class BuildEnvironment:
                isinstance(val, types.FunctionType) or \
                isinstance(val, class_types):
                 del self.config[key]
-        with open(filename, 'wb') as picklefile:
-            pickle.dump(self, picklefile, pickle.HIGHEST_PROTOCOL)
+        try:
+            with open(filename, 'wb') as picklefile:
+                pickle.dump(self, picklefile, pickle.HIGHEST_PROTOCOL)
+        except:
+            import logging
+            logging.warn("Cant pickle environment to %s" % filename)
         # reset attributes
         self.domains = domains
         self.config.values = values
@@ -1808,7 +1812,9 @@ class BuildEnvironment:
         return rewrite_needed
 
     def create_index(self, builder, group_entries=True,
-                     _fixre=re.compile(r'(.*) ([(][^()]*[)])')):
+                     _fixre=None):
+        if _fixre is None:
+            _fixre = re.compile(r'(.*) ([(][^()]*[)])')
         """Create the real index from the collected index entries."""
         new = {}
 

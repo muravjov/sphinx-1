@@ -11,3 +11,5 @@
 def is_commentable(node):
     # return node.__class__.__name__ in ('paragraph', 'literal_block')
     return node.__class__.__name__ == 'paragraph'
+
+semantic_markup = False

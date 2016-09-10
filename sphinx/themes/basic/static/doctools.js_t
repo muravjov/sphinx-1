@@ -284,6 +284,23 @@ var Documentation = {
 // quick alias for translations
 _ = Documentation.gettext;
 
+function forEachSelector(node, selector, cb) {
+  Array.prototype.forEach.call(node.querySelectorAll(selector), cb);
+}
+
 $(document).ready(function() {
   Documentation.init();
+
+  // semantic markup
+  forEachSelector(document, "[data-secnumber]", function(node) {
+    node.innerHTML = node.getAttribute("data-secnumber") + node.innerHTML;
+  });
+
+  forEachSelector(document, "[data-permalink]", function(node) {
+    var plDat = JSON.parse(node.getAttribute("data-permalink"));
+
+    // :TODO: integrate https://github.com/alexei/sprintf.js
+    var text = '<a class="headerlink" href="#' + plDat.url + '" title="' + plDat.title + '">' + plDat.text + '</a>';
+    node.innerHTML = node.innerHTML + text;
+  });
 });

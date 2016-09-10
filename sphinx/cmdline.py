@@ -118,6 +118,9 @@ def main(argv):
     group.add_option('-P', action='store_true', dest='pdb',
                      help='run Pdb on exception')
 
+    parser.add_option('--semantic-markup', action='store_true', dest='semantic_markup',
+                      help='generate more human, less machine output (html)')
+
     # parse options
     try:
         opts, args = parser.parse_args(list(argv[1:]))
@@ -156,6 +159,9 @@ def main(argv):
             'Error: Multibyte filename not supported on this filesystem '
             'encoding (%r).' % fs_encoding, file=sys.stderr)
         return 1
+    
+    import sphinx.util.websupport as suws
+    suws.semantic_markup = opts.semantic_markup
 
     # handle remaining filename arguments
     filenames = args[2:]

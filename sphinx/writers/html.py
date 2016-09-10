@@ -27,7 +27,30 @@ from sphinx.util.smartypants import sphinx_smarty_pants
 # A good overview of the purpose behind these classes can be found here:
 # http://www.arnebrodowski.de/blog/write-your-own-restructuredtext-writer.html
 
+import sphinx.util.websupport as suws
+semantic_markup = suws.semantic_markup
+import json
 
+import docutils.nodes
+class SemanticVisitor(docutils.nodes.NodeVisitor):
+    def visit_reference(self, node):
+        node.sm_decoration = None
+        
+        if len(node.children) == 1:
+            child = node.children[0]
+            is_aux = isinstance(child, (docutils.nodes.inline, docutils.nodes.literal))
+            if is_aux:
+                node.children = child.children
+            
+                # :TODO!!!: 
+                # запись .sm_decoration, как преобразовать
+                
+    def unknown_visit(self, node):
+        pass
+    
+    def unknown_departure(self, node):
+        pass
+                
 class HTMLWriter(Writer):
 
     # override embed-stylesheet default value to 0.
@@ -41,6 +64,10 @@ class HTMLWriter(Writer):
         self.builder = builder
 
     def translate(self):
+        if semantic_markup:
+            sv = SemanticVisitor(self.document)
+            self.document.walkabout(sv)
+        
         # sadly, this is mostly copied from parent class
         self.visitor = visitor = self.builder.translator_class(self.builder,
                                                                self.document)
@@ -53,7 +80,6 @@ class HTMLWriter(Writer):
                      'html_subtitle', 'html_body', ):
             setattr(self, attr, getattr(visitor, attr, None))
         self.clean_meta = ''.join(visitor.meta[2:])
-
 
 class HTMLTranslator(BaseTranslator):
     """
@@ -101,8 +127,12 @@ class HTMLTranslator(BaseTranslator):
            and node['ids'] and node['first']:
             self.body.append('<!--[%s]-->' % node['ids'][0])
 
+    def get_desc_signature_permalink(self, node):
+        return node, _('Permalink to this definition')
+        
     def depart_desc_signature(self, node):
-        self.add_permalink_ref(node, _('Permalink to this definition'))
+        if not semantic_markup:
+            self.add_permalink_ref(*self.get_desc_signature_permalink(node))
         self.body.append('</dt>\n')
 
     def visit_desc_addname(self, node):
@@ -214,8 +244,7 @@ class HTMLTranslator(BaseTranslator):
         self.body.append(self.starttag(node, 'a', '', **atts))
 
         if node.get('secnumber'):
-            self.body.append(('%s' + self.secnumber_suffix) %
-                             '.'.join(map(str, node['secnumber'])))
+            self.do_add_secnumber(node['secnumber'])
 
     def visit_number_reference(self, node):
         self.visit_reference(node)
@@ -241,10 +270,17 @@ class HTMLTranslator(BaseTranslator):
     def depart_seealso(self, node):
         self.depart_admonition(node)
 
-    def add_secnumber(self, node):
+    def secnumber2str(self, numbers):
+        return '.'.join(map(str, numbers)) + self.secnumber_suffix
+    
+    def do_add_secnumber(self, numbers):
+        if not semantic_markup:
+            self.body.append(self.secnumber2str(numbers))
+
+    def get_secnumber(self, node):
+        secnumber = None
         if node.get('secnumber'):
-            self.body.append('.'.join(map(str, node['secnumber'])) +
-                             self.secnumber_suffix)
+            secnumber = node['secnumber']
         elif isinstance(node.parent, nodes.section):
             if self.builder.name == 'singlehtml':
                 docname = node.parent.get('docname')
@@ -258,9 +294,13 @@ class HTMLTranslator(BaseTranslator):
                 if anchorname not in self.builder.secnumbers:
                     anchorname = ''  # try first heading which has no anchor
             if self.builder.secnumbers.get(anchorname):
-                numbers = self.builder.secnumbers[anchorname]
-                self.body.append('.'.join(map(str, numbers)) +
-                                 self.secnumber_suffix)
+                secnumber = self.builder.secnumbers[anchorname]
+        return secnumber
+        
+    def add_secnumber(self, node):
+        secnumber = self.get_secnumber(node)
+        if secnumber:
+            self.do_add_secnumber(secnumber)
 
     def add_fignumber(self, node):
         def append_fignumber(figtype, figure_id):
@@ -286,13 +326,51 @@ class HTMLTranslator(BaseTranslator):
     def add_permalink_ref(self, node, title):
         if node['ids'] and self.permalink_text and self.builder.add_permalinks:
             format = u'<a class="headerlink" href="#%s" title="%s">%s</a>'
-            self.body.append(format % (node['ids'][0], title, self.permalink_text))
+            if not semantic_markup:
+                self.body.append(format % (node['ids'][0], title, self.permalink_text))
 
     # overwritten to avoid emitting empty <ul></ul>
     def visit_bullet_list(self, node):
         if len(node) == 1 and node[0].tagname == 'toctree':
             raise nodes.SkipNode
         BaseTranslator.visit_bullet_list(self, node)
+        
+    def append_secnumber2attrs(self, kwargs, secnumber):
+        if secnumber:
+            kwargs["data-secnumber"] = self.secnumber2str(secnumber)
+            
+    def append_permalink2attrs(self, kwargs, p_data):
+        if p_data:
+            p_node, title = p_data
+            if p_node['ids'] and self.permalink_text and self.builder.add_permalinks:
+                kwargs["data-permalink"] = json.dumps({
+                    "url": p_node['ids'][0],
+                    "title": title,
+                    "text": self.permalink_text
+                })
+        
+    def starttag(self, *args, **kwargs):
+        if semantic_markup:
+            node = args[0]
+            if isinstance(node, docutils.nodes.title):
+                secnumber = self.get_secnumber(node)
+                self.append_secnumber2attrs(kwargs, secnumber)
+
+                p_data = self.get_title_permalink(node)
+                self.append_permalink2attrs(kwargs, p_data)
+                
+            if isinstance(node, docutils.nodes.reference):
+                secnumber = node.get('secnumber')
+                self.append_secnumber2attrs(kwargs, secnumber)
+                
+            if isinstance(node, docutils.nodes.caption):
+                p_data = self.get_caption_permalink(node)
+                self.append_permalink2attrs(kwargs, p_data)
+                
+            if isinstance(node, addnodes.desc_signature):
+                self.append_permalink2attrs(kwargs, self.get_desc_signature_permalink(node))
+                
+        return BaseTranslator.starttag(self, *args, **kwargs)
 
     # overwritten
     def visit_title(self, node):
@@ -304,7 +382,7 @@ class HTMLTranslator(BaseTranslator):
 
     # overwritten
     def visit_literal_block(self, node):
-        if node.rawsource != node.astext():
+        if semantic_markup or node.rawsource != node.astext():
             # most probably a parsed-literal block -- don't highlight
             return BaseTranslator.visit_literal_block(self, node)
         lang = self.highlightlang
@@ -341,18 +419,28 @@ class HTMLTranslator(BaseTranslator):
         self.add_fignumber(node.parent)
         self.body.append(self.starttag(node, 'span', '', CLASS='caption-text'))
 
+    def get_caption_permalink(self, node):
+        res = None
+        if isinstance(node.parent, nodes.container) and node.parent.get('literal_block'):
+            res = node.parent, _('Permalink to this code')
+        elif isinstance(node.parent, nodes.figure):
+            image_nodes = node.parent.traverse(nodes.image)
+            target_node = image_nodes and image_nodes[0] or node.parent
+
+            res = target_node, _('Permalink to this image')
+        elif node.parent.get('toctree'):
+            res = node.parent.parent, _('Permalink to this toctree')
+            
+        return res
+
     def depart_caption(self, node):
         self.body.append('</span>')
 
         # append permalink if available
-        if isinstance(node.parent, nodes.container) and node.parent.get('literal_block'):
-            self.add_permalink_ref(node.parent, _('Permalink to this code'))
-        elif isinstance(node.parent, nodes.figure):
-            image_nodes = node.parent.traverse(nodes.image)
-            target_node = image_nodes and image_nodes[0] or node.parent
-            self.add_permalink_ref(target_node, _('Permalink to this image'))
-        elif node.parent.get('toctree'):
-            self.add_permalink_ref(node.parent.parent, _('Permalink to this toctree'))
+        if not semantic_markup:
+            p_data = self.get_caption_permalink(node)
+            if p_data:
+                self.add_permalink_ref(*p_data)
 
         if isinstance(node.parent, nodes.container) and node.parent.get('literal_block'):
             self.body.append('</div>\n')
@@ -369,14 +457,21 @@ class HTMLTranslator(BaseTranslator):
     def depart_block_quote(self, node):
         self.body.append('</div></blockquote>\n')
 
+        
     # overwritten
     def visit_literal(self, node):
+        cls = ["docutils", "literal"]
+        if semantic_markup:
+            cls.append("pre")
+        else:
+            self.protect_literal_text += 1
+            
         self.body.append(self.starttag(node, 'code', '',
-                                       CLASS='docutils literal'))
-        self.protect_literal_text += 1
+                                       CLASS=" ".join(cls)))
 
     def depart_literal(self, node):
-        self.protect_literal_text -= 1
+        if not semantic_markup:
+            self.protect_literal_text -= 1
         self.body.append('</code>')
 
     def visit_productionlist(self, node):
@@ -659,10 +754,19 @@ class HTMLTranslator(BaseTranslator):
     def depart_manpage(self, node):
         return self.depart_literal_emphasis(node)
 
+    def is_title_permalink(self, node):
+        return self.permalink_text and self.builder.add_permalinks and node.parent.hasattr('ids') and node.parent['ids']
+
+    def get_title_permalink(self, node):
+        res = None
+        if self.is_title_permalink(node):
+            label = _('Permalink to this table') if isinstance(node.parent, nodes.table) else _('Permalink to this headline')
+            res = node.parent, label
+        return res
+
     def depart_title(self, node):
         close_tag = self.context[-1]
-        if (self.permalink_text and self.builder.add_permalinks and
-           node.parent.hasattr('ids') and node.parent['ids']):
+        if (not semantic_markup and self.is_title_permalink(node)):
             # add permalink anchor
             if close_tag.startswith('</h'):
                 self.add_permalink_ref(node.parent, _('Permalink to this headline'))
